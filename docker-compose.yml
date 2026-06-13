@@ -1,0 +1,325 @@
+version: "3.9"
+
+# =============================================================================
+# DSD B2B SaaS — Full Stack Docker Compose
+# =============================================================================
+
+networks:
+  b2b_internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  pulsar_data:
+
+services:
+
+  # ─────────────────────────────────────────────
+  # INFRASTRUCTURE
+  # ─────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: b2b_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-b2b_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - b2b_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-b2b_admin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: b2b_redis
+    restart: unless-stopped
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - redis_data:/data
+      - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf
+    ports:
+      - "6379:6379"
+    networks:
+      - b2b_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pulsar:
+    image: apachepulsar/pulsar:3.2.0
+    container_name: b2b_pulsar
+    restart: unless-stopped
+    command: bin/pulsar standalone
+    volumes:
+      - pulsar_data:/pulsar/data
+    ports:
+      - "6650:6650"
+      - "8080:8080"
+    networks:
+      - b2b_internal
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/admin/v2/brokers/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  pulsar-init:
+    image: apachepulsar/pulsar:3.2.0
+    container_name: b2b_pulsar_init
+    depends_on:
+      pulsar:
+        condition: service_healthy
+    networks:
+      - b2b_internal
+    volumes:
+      - ./infra/pulsar/init-topics.sh:/init-topics.sh
+    entrypoint: ["/bin/bash", "/init-topics.sh"]
+    restart: "no"
+
+  # ─────────────────────────────────────────────
+  # MICROSERVICES
+  # ─────────────────────────────────────────────
+
+  orchestration:
+    build:
+      context: ./services/orchestration
+      dockerfile: Dockerfile
+    container_name: b2b_orchestration
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - JWT_PUBLIC_KEY_PATH=/run/secrets/jwt_public_key
+      - IDENTITY_SERVICE_URL=http://identity:8001
+      - CATALOG_SERVICE_URL=http://catalog:8002
+      - SALES_SERVICE_URL=http://sales:8003
+      - ROUTE_SERVICE_URL=http://route:8004
+      - ATTENDANCE_SERVICE_URL=http://attendance:8005
+      - NOTIFICATION_SERVICE_URL=http://notification:8006
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - PULSAR_SERVICE_URL=${PULSAR_SERVICE_URL:-pulsar://pulsar:6650}
+      - ORCHESTRATION_SERVICE_SECRET=${ORCHESTRATION_SERVICE_SECRET}
+    volumes:
+      - ./infra/keys/public.pem:/run/secrets/jwt_public_key:ro
+    networks:
+      - b2b_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pulsar:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  identity:
+    build:
+      context: ./services/identity
+      dockerfile: Dockerfile
+    container_name: b2b_identity
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-b2b_admin}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/${IDENTITY_DB_NAME:-identity_db}
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_PRIVATE_KEY_PATH=/run/secrets/jwt_private_key
+      - JWT_PUBLIC_KEY_PATH=/run/secrets/jwt_public_key
+      - JWT_ALGORITHM=RS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      - JWT_REFRESH_TOKEN_EXPIRE_DAYS=${JWT_REFRESH_TOKEN_EXPIRE_DAYS:-7}
+    volumes:
+      - ./infra/keys/private.pem:/run/secrets/jwt_private_key:ro
+      - ./infra/keys/public.pem:/run/secrets/jwt_public_key:ro
+    networks:
+      - b2b_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  catalog:
+    build:
+      context: ./services/catalog
+      dockerfile: Dockerfile
+    container_name: b2b_catalog
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-b2b_admin}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/${CATALOG_DB_NAME:-catalog_db}
+      - REDIS_URL=redis://redis:6379/1
+      - JWT_PUBLIC_KEY_PATH=/run/secrets/jwt_public_key
+    volumes:
+      - ./infra/keys/public.pem:/run/secrets/jwt_public_key:ro
+    networks:
+      - b2b_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8002/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  sales:
+    build:
+      context: ./services/sales
+      dockerfile: Dockerfile
+    container_name: b2b_sales
+    restart: unless-stopped
+    ports:
+      - "8003:8003"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-b2b_admin}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/${SALES_DB_NAME:-sales_db}
+      - REDIS_URL=redis://redis:6379/2
+      - PULSAR_SERVICE_URL=${PULSAR_SERVICE_URL:-pulsar://pulsar:6650}
+      - JWT_PUBLIC_KEY_PATH=/run/secrets/jwt_public_key
+    volumes:
+      - ./infra/keys/public.pem:/run/secrets/jwt_public_key:ro
+    networks:
+      - b2b_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pulsar:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8003/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  route:
+    build:
+      context: ./services/route
+      dockerfile: Dockerfile
+    container_name: b2b_route
+    restart: unless-stopped
+    ports:
+      - "8004:8004"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-b2b_admin}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/${ROUTE_DB_NAME:-route_db}
+      - REDIS_URL=redis://redis:6379/3
+      - PULSAR_SERVICE_URL=${PULSAR_SERVICE_URL:-pulsar://pulsar:6650}
+      - JWT_PUBLIC_KEY_PATH=/run/secrets/jwt_public_key
+    volumes:
+      - ./infra/keys/public.pem:/run/secrets/jwt_public_key:ro
+    networks:
+      - b2b_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pulsar:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8004/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  attendance:
+    build:
+      context: ./services/attendance
+      dockerfile: Dockerfile
+    container_name: b2b_attendance
+    restart: unless-stopped
+    ports:
+      - "8005:8005"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-b2b_admin}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/${ATTENDANCE_DB_NAME:-attendance_db}
+      - REDIS_URL=redis://redis:6379/4
+      - JWT_PUBLIC_KEY_PATH=/run/secrets/jwt_public_key
+    volumes:
+      - ./infra/keys/public.pem:/run/secrets/jwt_public_key:ro
+    networks:
+      - b2b_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8005/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  notification:
+    build:
+      context: ./services/notification
+      dockerfile: Dockerfile
+    container_name: b2b_notification
+    restart: unless-stopped
+    ports:
+      - "8006:8006"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-b2b_admin}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/${NOTIFICATION_DB_NAME:-notification_db}
+      - REDIS_URL=redis://redis:6379/5
+      - PULSAR_SERVICE_URL=${PULSAR_SERVICE_URL:-pulsar://pulsar:6650}
+      - JWT_PUBLIC_KEY_PATH=/run/secrets/jwt_public_key
+      - FIREBASE_CREDENTIALS_PATH=/run/secrets/firebase_credentials
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY}
+      - VAPID_CLAIMS_EMAIL=${VAPID_CLAIMS_EMAIL}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - EMAIL_FROM=${EMAIL_FROM}
+    volumes:
+      - ./infra/keys/public.pem:/run/secrets/jwt_public_key:ro
+      - ./infra/keys/firebase-service-account.json:/run/secrets/firebase_credentials:ro
+    networks:
+      - b2b_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pulsar:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8006/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5

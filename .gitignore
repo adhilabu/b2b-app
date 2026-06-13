@@ -1,0 +1,40 @@
+# Keys (never commit)
+infra/keys/
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+htmlcov/
+.coverage
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Go
+services/orchestration/coverage.out
+services/orchestration/orchestration
+
+# Environment
+.env
+!.env.example
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Docker volumes (if bind-mounted locally)
+postgres_data/
+redis_data/
+pulsar_data/

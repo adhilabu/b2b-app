@@ -1,0 +1,64 @@
+version: "3.9"
+
+# =============================================================================
+# DSD B2B SaaS — Test Environment Docker Compose
+# Lightweight: uses test databases, mock Pulsar topics
+# =============================================================================
+
+networks:
+  b2b_test:
+    driver: bridge
+
+volumes:
+  test_postgres_data:
+
+services:
+
+  postgres_test:
+    image: postgres:16-alpine
+    container_name: b2b_postgres_test
+    environment:
+      POSTGRES_USER: b2b_admin
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: postgres
+    volumes:
+      - test_postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5433:5432"
+    networks:
+      - b2b_test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U b2b_admin"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis_test:
+    image: redis:7-alpine
+    container_name: b2b_redis_test
+    ports:
+      - "6380:6379"
+    networks:
+      - b2b_test
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  pulsar_test:
+    image: apachepulsar/pulsar:3.2.0
+    container_name: b2b_pulsar_test
+    command: bin/pulsar standalone
+    ports:
+      - "6651:6650"
+      - "8081:8080"
+    networks:
+      - b2b_test
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/admin/v2/brokers/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
