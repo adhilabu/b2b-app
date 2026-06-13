@@ -180,4 +180,4 @@ build-service: ## Build a single service image (usage: make build-service SERVIC
 # DOCS
 # ─────────────────────────────────────────────
 docs-serve: ## Serve docs locally (requires mkdocs: pip install mkdocs-material)
-	@mkdocs serve --config-file docs/mkdocs.yml
+	@mkdocs serve --config-file docs/mkdocs.yml -a localhost:8008

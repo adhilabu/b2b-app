@@ -63,6 +63,14 @@ func main() {
 	// ─────────────────────────────────────────────
 	// PUBLIC ROUTES (no auth)
 	// ─────────────────────────────────────────────
+	router.GET("/", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Welcome to the DSD B2B SaaS Orchestration API Gateway",
+			"health":  "/health",
+			"services": []string{"identity", "catalog", "sales", "route", "attendance", "notification"},
+		})
+	})
+
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "healthy",

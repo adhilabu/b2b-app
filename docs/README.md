@@ -76,18 +76,39 @@ curl -X POST http://localhost:8000/auth/login \
   -d '{"email": "admin@example.com", "password": "your-password"}'
 ```
 
-### 5. Interactive API Docs
-Each service exposes Swagger UI at `/docs`:
+### 5. Interactive API & Developer Docs
 
-| Service | URL |
-|---|---|
-| Orchestration | [http://localhost:8000/health](http://localhost:8000/health) |
-| Identity | [http://localhost:8001/docs](http://localhost:8001/docs) |
-| Catalog | [http://localhost:8002/docs](http://localhost:8002/docs) |
-| Sales | [http://localhost:8003/docs](http://localhost:8003/docs) |
-| Route | [http://localhost:8004/docs](http://localhost:8004/docs) |
-| Attendance | [http://localhost:8005/docs](http://localhost:8005/docs) |
-| Notification | [http://localhost:8006/docs](http://localhost:8006/docs) |
+#### API Gateway Endpoints
+The orchestration gateway on **port 8000** serves as the public ingress for mobile/frontend clients:
+- **Root URL**: `http://localhost:8000/` (returns gateway welcome response & downstream service links)
+- **Health Check**: `http://localhost:8000/health` (downstream health aggregation check)
+
+#### Downstream Service Documentation
+Each Python service automatically generates standard interactive documents and OpenAPI specifications directly on its own port:
+
+| Service | Port | Swagger UI | ReDoc | OpenAPI JSON (for Codegen/Postman) |
+|---|---|---|---|---|
+| **Orchestration** | `8000` | — | — | — |
+| **Identity** | `8001` | [Direct Link](http://localhost:8001/docs) | [ReDoc](http://localhost:8001/redoc) | [openapi.json](http://localhost:8001/openapi.json) |
+| **Catalog** | `8002` | [Direct Link](http://localhost:8002/docs) | [ReDoc](http://localhost:8002/redoc) | [openapi.json](http://localhost:8002/openapi.json) |
+| **Sales** | `8003` | [Direct Link](http://localhost:8003/docs) | [ReDoc](http://localhost:8003/redoc) | [openapi.json](http://localhost:8003/openapi.json) |
+| **Route** | `8004` | [Direct Link](http://localhost:8004/docs) | [ReDoc](http://localhost:8004/redoc) | [openapi.json](http://localhost:8004/openapi.json) |
+| **Attendance** | `8005` | [Direct Link](http://localhost:8005/docs) | [ReDoc](http://localhost:8005/redoc) | [openapi.json](http://localhost:8005/openapi.json) |
+| **Notification** | `8006` | [Direct Link](http://localhost:8006/docs) | [ReDoc](http://localhost:8006/redoc) | [openapi.json](http://localhost:8006/openapi.json) |
+
+#### Searchable Markdown Doc Site
+To browse all developer docs (including this README, architecture blueprints, data models, and offline-sync protocols) in a beautiful locally-hosted website, run:
+```bash
+# 1. Activate the virtual environment
+source .venv/bin/activate
+
+# 2. Install documentation theme dependencies
+pip install mkdocs-material
+
+# 3. Serve the docs locally (hosts on port 8008 to prevent gateway collision)
+make docs-serve
+```
+The unified docs website will then be available at: **[http://localhost:8008](http://localhost:8008)**.
 
 ---
 

@@ -1,0 +1,41 @@
+site_name: DSD B2B SaaS Platform
+site_description: Backend architecture, offline sync protocol, and API reference documentation for DSD SaaS.
+docs_dir: .
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+nav:
+  - Home: README.md
+  - Developer Guide: developer-guide.md
+  - Authentication Guide: auth-guide.md
+  - Sync Protocol: sync-protocol.md
+  - Data Models: data-models.md
+  - Deployment: deployment.md
+  - API References:
+    - Orchestration Gateway: api-reference/orchestration.md
+    - Identity Service: api-reference/identity.md
+    - Catalog Service: api-reference/catalog.md
+    - Sales Service: api-reference/sales.md
+    - Route Service: api-reference/route.md
+    - Attendance Service: api-reference/attendance.md
+    - Notification Service: api-reference/notification.md
