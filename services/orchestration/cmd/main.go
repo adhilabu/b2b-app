@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -102,13 +103,31 @@ func main() {
 	protected.POST("/sync/push", syncHandler.Push)
 	protected.GET("/sync/pull", syncHandler.Pull)
 
-	// Proxy routes to downstream services
+	// Proxy routes to downstream services — most are passthrough
 	protected.Any("/identity/*path", proxyHandler.ProxyTo("identity"))
 	protected.Any("/catalog/*path", proxyHandler.ProxyTo("catalog"))
-	protected.Any("/sales/*path", proxyHandler.ProxyTo("sales"))
-	protected.Any("/route/*path", proxyHandler.ProxyTo("route"))
 	protected.Any("/attendance/*path", proxyHandler.ProxyTo("attendance"))
 	protected.Any("/notification/*path", proxyHandler.ProxyTo("notification"))
+
+	// Sales routes — attendance check applied inline only for van settlement paths
+	attendanceBlocker := middleware.AttendanceBlocker(cfg.AttendanceServiceURL)
+	salesProxy := proxyHandler.ProxyTo("sales")
+	protected.Any("/sales/*path", func(c *gin.Context) {
+		path := c.Param("path")
+		// Van settlement requires the field rep to be clocked in
+		if strings.HasPrefix(path, "/van/settle") {
+			attendanceBlocker(c)
+			if c.IsAborted() {
+				return
+			}
+		}
+		salesProxy(c)
+	})
+
+	// All route service operations require attendance check
+	routeGuarded := protected.Group("/route")
+	routeGuarded.Use(attendanceBlocker)
+	routeGuarded.Any("/*path", proxyHandler.ProxyTo("route"))
 
 	// ─────────────────────────────────────────────
 	// START SERVER WITH GRACEFUL SHUTDOWN

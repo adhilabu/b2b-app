@@ -161,6 +161,10 @@ class ConnectionManager:
         for uid in tenant_users:
             await self.send_to_user(uid, message)
 
+    async def send_notification(self, user_id: str, payload: dict) -> None:
+        """Send a notification payload to a specific user's active WebSocket connections."""
+        await self.send_to_user(user_id, payload)
+
 
 ws_manager = ConnectionManager()
 
@@ -370,12 +374,25 @@ class SendNotificationRequest(BaseModel):
 # LIFESPAN
 # ─────────────────────────────────────────────
 
+from app.consumers.event_consumer import PulsarEventConsumer
+
+_pulsar_consumer: PulsarEventConsumer = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _pulsar_consumer
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    _pulsar_consumer = PulsarEventConsumer(settings.PULSAR_SERVICE_URL, ws_manager)
+    await _pulsar_consumer.start()
+
     logger.info("✅ Notification Service ready")
     yield
+
+    if _pulsar_consumer:
+        await _pulsar_consumer.stop()
     await engine.dispose()
 
 
@@ -542,3 +559,26 @@ async def health():
             "email": "configured" if settings.SMTP_USER else "stub",
         }
     }
+
+
+# ─────────────────────────────────────────────
+# SYNC EVENTS (Offline push from Orchestration)
+# ─────────────────────────────────────────────
+
+class SyncEventIn(BaseModel):
+    event_id: str
+    event_type: str
+    domain: str
+    timestamp: Optional[int] = None
+    payload: dict = {}
+
+
+@app.post("/sync/events", tags=["Sync"])
+async def receive_sync_event(event: SyncEventIn):
+    """
+    Notification service is server-push only. Offline sync events from clients
+    are acknowledged without processing — notifications flow from server to client,
+    not the reverse.
+    """
+    logger.info(f"sync_event received: type={event.event_type} id={event.event_id}")
+    return {"event_id": event.event_id, "status": "acknowledged"}

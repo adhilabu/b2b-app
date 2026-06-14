@@ -191,12 +191,25 @@ class OptimizeResponse(BaseModel):
 # LIFESPAN
 # ─────────────────────────────────────────────
 
+from app.consumers.event_consumer import RouteEventConsumer
+
+_route_consumer: RouteEventConsumer = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _route_consumer
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    _route_consumer = RouteEventConsumer(settings.PULSAR_SERVICE_URL)
+    await _route_consumer.start()
+
     logger.info("✅ Route Service ready")
     yield
+
+    if _route_consumer:
+        await _route_consumer.stop()
     await engine.dispose()
 
 
@@ -364,3 +377,93 @@ async def sync_beats(
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "healthy", "service": "route"}
+
+
+# ─────────────────────────────────────────────
+# SYNC EVENTS (Offline push from Orchestration)
+# ─────────────────────────────────────────────
+
+class SyncEventIn(BaseModel):
+    event_id: str
+    event_type: str
+    domain: str
+    timestamp: Optional[int] = None
+    payload: dict = {}
+
+
+@app.post("/sync/events", tags=["Sync"])
+async def receive_sync_event(
+    event: SyncEventIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
+    """
+    Receives offline beat plan events from the Orchestration service.
+    Handles BeatPlanCreated (upsert beat + stops) and RouteOptimized (mark optimized).
+    """
+    if event.event_type == "BeatPlanCreated":
+        payload = event.payload
+        client_beat_id = payload.get("beat_id")
+
+        scheduled_date_str = payload.get("scheduled_date")
+        if not scheduled_date_str:
+            return {"event_id": event.event_id, "status": "skipped", "reason": "missing scheduled_date"}
+
+        from datetime import date as date_type
+        try:
+            scheduled_date = date_type.fromisoformat(scheduled_date_str)
+        except ValueError:
+            return {"event_id": event.event_id, "status": "rejected", "reason": "invalid scheduled_date format"}
+
+        # Idempotent: check if beat with this client ID already exists
+        beat = None
+        if client_beat_id:
+            existing = await db.execute(
+                select(Beat).where(
+                    Beat.tenant_id == current_user.tenant_id,
+                    Beat.id == client_beat_id,
+                )
+            )
+            beat = existing.scalar_one_or_none()
+
+        if beat is None:
+            beat = Beat(
+                tenant_id=current_user.tenant_id,
+                user_id=payload.get("user_id") or current_user.sub,
+                name=payload.get("name", "Offline Beat"),
+                scheduled_date=scheduled_date,
+                is_optimized=False,
+                sync_version=0,
+            )
+            db.add(beat)
+            await db.flush()
+
+            for idx, stop_data in enumerate(payload.get("stops", [])):
+                stop = BeatStop(
+                    beat_id=beat.id,
+                    customer_id=stop_data["customer_id"],
+                    customer_name=stop_data.get("customer_name", ""),
+                    latitude=stop_data.get("latitude"),
+                    longitude=stop_data.get("longitude"),
+                    sequence=idx,
+                    estimated_visit_minutes=stop_data.get("estimated_visit_minutes", 30),
+                )
+                db.add(stop)
+
+        await db.commit()
+        return {"event_id": event.event_id, "status": "accepted", "beat_id": str(beat.id)}
+
+    elif event.event_type == "RouteOptimized":
+        beat_id = event.payload.get("beat_id")
+        if not beat_id:
+            return {"event_id": event.event_id, "status": "skipped", "reason": "missing beat_id"}
+
+        result = await db.execute(select(Beat).where(Beat.id == beat_id))
+        beat = result.scalar_one_or_none()
+        if beat:
+            beat.is_optimized = True
+            beat.sync_version += 1
+            await db.commit()
+        return {"event_id": event.event_id, "status": "accepted"}
+
+    return {"event_id": event.event_id, "status": "skipped", "reason": f"unhandled event type: {event.event_type}"}

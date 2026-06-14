@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import engine, Base
-from app.routers import auth, users, customers, tenants
+from app.routers import auth, users, customers, tenants, sync_events
 
 settings = get_settings()
 logging.basicConfig(level=settings.LOG_LEVEL if hasattr(settings, 'LOG_LEVEL') else "INFO")
@@ -54,6 +54,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(customers.router)
 app.include_router(tenants.router)
+app.include_router(sync_events.router)
 
 
 @app.get("/health", tags=["Health"])

@@ -468,3 +468,92 @@ async def list_leaves(
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "healthy", "service": "attendance"}
+
+
+# ─────────────────────────────────────────────
+# SYNC EVENTS (Offline push from Orchestration)
+# ─────────────────────────────────────────────
+
+class SyncEvent(BaseModel):
+    event_id: str
+    event_type: str
+    domain: str
+    timestamp: Optional[int] = None
+    payload: dict = {}
+
+
+@app.post("/sync/events", tags=["Sync"])
+async def receive_sync_event(
+    event: SyncEvent,
+    db: AsyncSession = Depends(get_db),
+    current_user: TokenPayload = Depends(get_current_user),
+):
+    """
+    Receives a single offline domain event forwarded by the Orchestration service.
+    Performs idempotent upserts for AttendanceLogged and LeaveRequested events.
+    """
+    if event.event_type == "AttendanceLogged":
+        payload = event.payload
+        user_id = payload.get("user_id") or current_user.sub
+        attendance_date_str = payload.get("attendance_date")
+        if not attendance_date_str:
+            return {"event_id": event.event_id, "status": "skipped", "reason": "missing attendance_date"}
+
+        from datetime import date as date_type
+        try:
+            att_date = date_type.fromisoformat(attendance_date_str)
+        except ValueError:
+            return {"event_id": event.event_id, "status": "rejected", "reason": "invalid date format"}
+
+        # Idempotent upsert: check if attendance already exists for this user + date
+        existing = await db.execute(
+            select(Attendance).where(
+                Attendance.user_id == user_id,
+                Attendance.attendance_date == att_date,
+            )
+        )
+        att = existing.scalar_one_or_none()
+        if att is None:
+            att = Attendance(
+                tenant_id=current_user.tenant_id,
+                user_id=user_id,
+                attendance_date=att_date,
+                status=AttendanceStatus(payload.get("status", "present")),
+                check_in_at=datetime.fromisoformat(payload["check_in_at"]) if payload.get("check_in_at") else None,
+                check_in_lat=str(payload["check_in_lat"]) if payload.get("check_in_lat") else None,
+                check_in_lon=str(payload["check_in_lon"]) if payload.get("check_in_lon") else None,
+            )
+            db.add(att)
+        else:
+            # Update with richer data if provided — Last-Write-Wins
+            if payload.get("check_out_at"):
+                att.check_out_at = datetime.fromisoformat(payload["check_out_at"])
+                att.check_out_lat = str(payload["check_out_lat"]) if payload.get("check_out_lat") else None
+                att.check_out_lon = str(payload["check_out_lon"]) if payload.get("check_out_lon") else None
+        await db.commit()
+        return {"event_id": event.event_id, "status": "accepted"}
+
+    elif event.event_type == "LeaveRequested":
+        payload = event.payload
+        user_id = payload.get("user_id") or current_user.sub
+        from datetime import date as date_type
+        try:
+            from_date = date_type.fromisoformat(payload["from_date"])
+            to_date = date_type.fromisoformat(payload["to_date"])
+        except (KeyError, ValueError):
+            return {"event_id": event.event_id, "status": "rejected", "reason": "missing or invalid from_date/to_date"}
+
+        leave = LeaveRequest(
+            tenant_id=current_user.tenant_id,
+            user_id=user_id,
+            leave_type=LeaveType(payload.get("leave_type", "casual")),
+            from_date=from_date,
+            to_date=to_date,
+            reason=payload.get("reason", ""),
+            status=LeaveStatus.pending,
+        )
+        db.add(leave)
+        await db.commit()
+        return {"event_id": event.event_id, "status": "accepted"}
+
+    return {"event_id": event.event_id, "status": "skipped", "reason": f"unhandled event type: {event.event_type}"}

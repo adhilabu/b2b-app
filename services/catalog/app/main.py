@@ -368,3 +368,27 @@ async def sync_catalog(
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "healthy", "service": "catalog"}
+
+
+# ─────────────────────────────────────────────
+# SYNC EVENTS (Offline push from Orchestration)
+# ─────────────────────────────────────────────
+
+class SyncEventIn(BaseModel):
+    event_id: str
+    event_type: str
+    domain: str
+    timestamp: Optional[int] = None
+    payload: dict = {}
+
+
+@app.post("/sync/events", tags=["Sync"], status_code=403)
+async def receive_sync_event(event: SyncEventIn):
+    """
+    Catalog is Server-Wins: mobile clients cannot push catalog mutations.
+    All catalog data flows from server to client — this endpoint always rejects.
+    """
+    raise HTTPException(
+        status_code=403,
+        detail="Catalog is server-authoritative. Clients cannot push catalog mutations offline.",
+    )

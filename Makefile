@@ -176,6 +176,24 @@ build: ## Build all Docker images without starting
 build-service: ## Build a single service image (usage: make build-service SERVICE=identity)
 	@docker compose build $(SERVICE)
 
+build-go: ## Build Go orchestration binary locally (requires Go toolchain)
+	@cd services/orchestration && go build -o bin/orchestration ./cmd/...
+	@echo "✅ Orchestration binary: services/orchestration/bin/orchestration"
+
+vet-go: ## Run go vet on orchestration service
+	@cd services/orchestration && go vet ./...
+
+# ─────────────────────────────────────────────
+# VAN SALES (PHASE 2)
+# ─────────────────────────────────────────────
+van-checkout: ## Start of day: load a van (usage: make van-checkout - see API docs for payload)
+	@echo "ℹ️  Use POST /sales/van/stocks/ with the van stock payload."
+	@echo "   See docs/api-reference/van-sales.md for request format."
+
+van-settle: ## End of day: settle a van (usage: make van-settle - see API docs for payload)
+	@echo "ℹ️  Use POST /sales/van/settle/ with the settlement payload."
+	@echo "   Note: Requires the driver to be checked in via attendance service."
+
 # ─────────────────────────────────────────────
 # DOCS
 # ─────────────────────────────────────────────
